@@ -1,84 +1,72 @@
 import streamlit as st
-import re
 import pandas as pd
-from io import BytesIO
+import re
 from datetime import datetime
 
-st.title("CB/CH Loss Data Extractor")
+def extract_loss_data(raw_text):
+    pattern = re.compile(
+        r'(?P<line>CB|CH)[^\d]{0,10}'                                  # Line
+        r'(?P<date>\d{1,2}/\d{1,2}/\d{4})\s*[\-]?\s*'                   # Date
+        r'\(?\s*(?P<shift>[ABCabc])\s*\)?[\s\-:]+'                      # Shift
+        r'(?P<station>(Op|OP|LM)[^\s\-:\n,]*)[^\n]*?'                   # Station (with support for -1, (#123), etc.)
+        r'(?P<issue>.+?)'                                               # Issue
+        r'(?:\s|,|\(|\[)*'                                              # Optional separator
+        r'(?P<duration>\d{2,4})\s*(?:min|minutes|MIN)?'                 # Duration at end
+        , re.IGNORECASE | re.DOTALL
+    )
 
-raw_text = st.text_area("Paste raw WhatsApp-style production reports here (CB + CH, multiple dates allowed):", height=300)
+    matches = pattern.finditer(raw_text)
+    data = []
 
-def parse_date(text_block):
-    date_match = re.search(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b", text_block)
-    if date_match:
-        day, month, year = date_match.groups()
-        if len(year) == 2:
-            year = '20' + year  # Convert 25 to 2025
+    for match in matches:
+        line = match.group('line').upper()
+        raw_date = match.group('date')
+        shift = match.group('shift').upper()
+        station = match.group('station').replace("#", "").strip()
+        issue = match.group('issue').strip().strip('-–:')
+        duration = match.group('duration').strip()
+
         try:
-            return datetime.strptime(f"{day}/{month}/{year}", "%d/%m/%Y").strftime("%d/%m/%Y")
-        except:
-            return ""
-    return ""
+            formatted_date = datetime.strptime(raw_date, "%d/%m/%Y").strftime("%d/%m/%Y")
+        except ValueError:
+            try:
+                formatted_date = datetime.strptime(raw_date, "%d-%m-%Y").strftime("%d/%m/%Y")
+            except:
+                formatted_date = None
 
-def extract_losses(text):
-    blocks = re.split(r"\n(?=.*?(CB LINE|BLOCK|CH|HEAD))", text, flags=re.IGNORECASE)
-    combined_blocks = ["".join(pair) for pair in zip(blocks[1::2], blocks[2::2])]
-    
-    results = []
+        data.append({
+            "Line": line,
+            "Date": formatted_date,
+            "Shift": shift,
+            "Station": station,
+            "Issue/Observation": issue,
+            "Down time": duration
+        })
 
-    for block in combined_blocks:
-        line = "CB" if re.search(r"\b(CB LINE|BLOCK)\b", block, re.IGNORECASE) else "CH"
-        date = parse_date(block)
-        shift_match = re.search(r"\(([A-Ca-c])\)", block)
-        shift = shift_match.group(1).upper() if shift_match else ""
+    return pd.DataFrame(data)
 
-        # Match stations like OP70, OP150-2, OP120(#241), etc.
-        loss_entries = re.findall(
-            r"(OP\d{2,3}(?:-\d)?(?:\(#?\d+(?:-\d+)?\))?)\s*[-:]?\s*(.*?)(\d{1,3})\s*min",
-            block, re.IGNORECASE
-        )
+# Streamlit App
+st.set_page_config(page_title="Loss Data Extractor", layout="wide")
+st.title("🔍 CB / CH Loss Data Extractor")
 
-        for station, issue, mins in loss_entries:
-            results.append({
-                "Line": line,
-                "Date": date,
-                "Shift": shift,
-                "Station": station.strip().upper(),
-                "E/M": "",
-                "Issue/Observation": issue.strip(),
-                "Down time": int(mins),
-                "Impacted loss": "",
-                "OLE Impacted Loss": "",
-                "Activity Performed": "",
-                "Attend by": "",
-                "EWO Status": "",
-                "Countermeasure": "",
-                "Responsibility": "",
-                "Target date": "",
-                "Status": "",
-                "Spare Required": "",
-                "Stratification": "",
-                "Remark": ""
-            })
+raw_input = st.text_area("Paste raw WhatsApp-style loss data below:", height=400)
 
-    return pd.DataFrame(results)
-
-if st.button("Extract Data"):
-    if raw_text.strip():
-        df = extract_losses(raw_text)
-        if not df.empty:
-            st.success("✅ Data extracted successfully!")
-            st.dataframe(df)
-
-            output = BytesIO()
-            df.to_excel(output, index=False, engine='openpyxl')
-            st.download_button(
-                "📥 Download as Excel",
-                output.getvalue(),
-                file_name="cb_ch_loss_data.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-        else:
-            st.error("⚠️ No valid loss data found.")
+if st.button("Extract Loss Data"):
+    if raw_input.strip() == "":
+        st.warning("Please paste some raw text data first.")
     else:
-        st.warning("⚠️ Please paste some raw report data first.")
+        df = extract_loss_data(raw_input)
+
+        if df.empty:
+            st.error("🚫 No valid data found. Please check the input format.")
+        else:
+            st.success(f"✅ Extracted {len(df)} entries!")
+            st.dataframe(df, use_container_width=True)
+
+            csv = df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Download CSV",
+                data=csv,
+                file_name='extracted_loss_data.csv',
+                mime='text/csv'
+            )
