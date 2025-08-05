@@ -3,87 +3,88 @@ import re
 import pandas as pd
 from datetime import datetime
 
-st.set_page_config(page_title="CB & CH Loss Extractor", layout="wide")
-st.title("📋 CB/CH Loss Data Extractor by Shift")
+st.title("CH/HEAD LINE Loss Extractor")
 
-raw_input = st.text_area("📥 Paste WhatsApp Loss Data:", height=400)
+raw_text = st.text_area("Paste Raw WhatsApp Data:")
 
-def extract_entries(raw_text):
-    entries = []
-    current_date = None
-    current_shift = None
-    current_line = None
+def extract_loss_data(text):
+    shift_pattern = re.compile(r"(?P<date>\d{2}/\d{2}/\d{4}).*?HEAD LINE.*?\((?P<shift>[ABC])-SHIFT\)(.*?)(?=(\d{2}/\d{2}/\d{4}|$))", re.DOTALL)
+    loss_pattern = re.compile(r"#?\s*Op\s*(\d+(?:[-–]\d+)?)(?:\s*\((.*?)\))?-?\s*(.*?)(?:\(|-)?\s*(\d{1,2}:\d{2})\s*[-–]\s*(\d{1,2}:\d{2})\)?-?\s*(\d+)\s*min", re.IGNORECASE)
+    alt_loss_pattern = re.compile(r"#?\s*Op\s*(\d+(?:[-–]\d+)?)(?:\s*\((.*?)\))?-?\s*(.*?)\-?\s*(\d+)\s*min", re.IGNORECASE)
 
-    lines = raw_text.strip().split('\n')
+    records = []
+    for shift_match in shift_pattern.finditer(text):
+        date_str = shift_match.group("date")
+        shift = shift_match.group("shift").upper()
+        losses_text = shift_match.group(3)
 
-    for line in lines:
-        # 1. Extract date
-        date_match = re.search(r'(\d{1,2}[/-]\d{1,2}[/-]\d{4})', line)
-        if date_match:
-            try:
-                dt_obj = datetime.strptime(date_match.group(1).replace("-", "/"), "%d/%m/%Y")
-                current_date = dt_obj.strftime("%d/%m/%Y")
-            except:
-                current_date = None
-            continue
+        try:
+            date_obj = datetime.strptime(date_str, "%d/%m/%Y")
+            wk = date_obj.strftime("%V")
+        except:
+            date_obj = None
+            wk = ""
 
-        # 2. Extract shift
-        shift_match = re.search(r'\((A|B|C)\)', line, re.IGNORECASE)
-        if shift_match:
-            current_shift = shift_match.group(1).upper()
-            # Check line type
-            if "HEAD" in line.upper() or "CH" in line.upper():
-                current_line = "CH"
-            elif "BLOCK" in line.upper() or "CB" in line.upper():
-                current_line = "CB"
-            continue
+        found_loss = False
+        for match in loss_pattern.finditer(losses_text):
+            found_loss = True
+            station = match.group(1)
+            machine_no = match.group(2) or ""
+            issue = match.group(3).strip()
+            downtime = match.group(7).strip()
+            station_full = f"{station}({machine_no})" if machine_no else station
 
-        # 3. Check for line-only updates
-        if "HEAD" in line.upper() or "CH" in line.upper():
-            current_line = "CH"
-        elif "BLOCK" in line.upper() or "CB" in line.upper():
-            current_line = "CB"
-
-        # 4. Extract loss entries
-        loss_match = re.search(
-            r'(Op\d+(?:[-/#]?\d+)?(?:\(#\d+(?:&?#\d+)?\))?)\W*[^\d\n\r]{0,10}(.*?)(?:-|–|—)?\s*(\(?\d{1,4})\s*min\)?',
-            line, re.IGNORECASE
-        )
-        if loss_match:
-            station = loss_match.group(1).strip()
-            issue = loss_match.group(2).strip(" :-–—")
-            downtime = loss_match.group(3).strip(" (min)").replace("(", "")
-            entries.append({
-                "Date": current_date or "",
-                "Shift": current_shift or "",
-                "Line": current_line or "",
-                "Station": station,
+            records.append({
+                "Line": "CH",
+                "WK": wk,
+                "Date": date_obj.strftime("%d/%m/%Y") if date_obj else "",
+                "Shift": shift,
+                "Station": station_full,
+                "E/M": "",  # Placeholder
                 "Issue/Observation": issue,
                 "Down time": downtime
             })
 
-    return entries
+        for match in alt_loss_pattern.finditer(losses_text):
+            found_loss = True
+            station = match.group(1)
+            machine_no = match.group(2) or ""
+            issue = match.group(3).strip()
+            downtime = match.group(4).strip()
+            station_full = f"{station}({machine_no})" if machine_no else station
 
-if raw_input:
-    extracted = extract_entries(raw_input)
-    if extracted:
-        df_all = pd.DataFrame(extracted)
+            records.append({
+                "Line": "CH",
+                "WK": wk,
+                "Date": date_obj.strftime("%d/%m/%Y") if date_obj else "",
+                "Shift": shift,
+                "Station": station_full,
+                "E/M": "",
+                "Issue/Observation": issue,
+                "Down time": downtime
+            })
 
-        # Ensure Shift A/B/C always present, even if empty
-        shifts = ['A', 'B', 'C']
-        for shift in shifts:
-            df_shift = df_all[df_all['Shift'] == shift]
-            st.subheader(f"🔹 Shift {shift}")
-            if not df_shift.empty:
-                st.dataframe(df_shift, use_container_width=True)
-                csv = df_shift.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label=f"📥 Download Shift {shift} CSV",
-                    data=csv,
-                    file_name=f"shift_{shift}_loss_data.csv",
-                    mime="text/csv"
-                )
-            else:
-                st.info(f"No data for Shift {shift}")
+        # If no losses found, still insert an empty row for this shift
+        if not found_loss:
+            records.append({
+                "Line": "CH",
+                "WK": wk,
+                "Date": date_obj.strftime("%d/%m/%Y") if date_obj else "",
+                "Shift": shift,
+                "Station": "",
+                "E/M": "",
+                "Issue/Observation": "",
+                "Down time": ""
+            })
+
+    return pd.DataFrame(records)
+
+if raw_text:
+    df = extract_loss_data(raw_text)
+    if df.empty:
+        st.error("No valid loss data found.")
     else:
-        st.error("❌ No valid data found. Please check the format.")
+        st.success("Data extracted successfully!")
+        st.dataframe(df)
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button("Download CSV", csv, "loss_data.csv", "text/csv")
