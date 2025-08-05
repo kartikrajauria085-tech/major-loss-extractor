@@ -4,18 +4,26 @@ import pandas as pd
 from datetime import datetime
 from io import BytesIO
 
+# --- App Layout ---
 st.set_page_config(page_title="CB & CH Multi-Report Extractor", layout="wide")
-st.title("📋 Extract Major Losses from CB & CH WhatsApp Reports")
+st.title("📋 CB & CH Major Losses Extractor (Multiple Reports)")
 
-# --- Extract shift and date ---
+# --- Extract date & shift ---
 def parse_shift_and_date(text):
-    date_match = re.search(r'DATE[-: ]*([0-9/]{2,})', text, re.IGNORECASE) or re.search(r'(^[0-9]{2}/[0-9]{2}/[0-9]{4})', text)
-    shift_match = re.search(r'\(([ABCabc]\-?SHIFT?)\)', text)
+    # CB style: DATE-15/07/2025 (B)
+    date_match = re.search(r'DATE[-:\s]*([0-9]{2}/[0-9]{2}/[0-9]{4})', text, re.IGNORECASE)
+    # CH style: 15/07/2025\nHEAD LINE (B-SHIFT)
+    if not date_match:
+        date_match = re.search(r'(^[0-9]{2}/[0-9]{2}/[0-9]{4})', text)
     date = date_match.group(1).strip() if date_match else ''
-    shift = shift_match.group(1).upper().replace("-SHIFT", "") if shift_match else ''
+
+    # Shift in (B-SHIFT) or (C)
+    shift_match = re.search(r'\(([ABCabc])(?:-?SHIFT)?\)', text)
+    shift = shift_match.group(1).upper() if shift_match else ''
+    
     return date, shift
 
-# --- Extract major losses ---
+# --- Extract major losses from one block ---
 def extract_losses(text, line_type):
     date, shift = parse_shift_and_date(text)
     wk = ''
@@ -23,12 +31,14 @@ def extract_losses(text, line_type):
         wk = datetime.strptime(date, "%d/%m/%Y").isocalendar().week if date else ''
     except:
         pass
+
     losses = []
     pattern = re.compile(r'(OP\d+(?:\([^)]+\))?)\s*[-:]?\s*(.*?)(?:\(\d{1,2}:\d{2}(?:-\d{1,2}:\d{2})?\))?[-:]?\s*(\d+)\s*min', flags=re.IGNORECASE)
     for match in pattern.finditer(text):
         station = match.group(1).strip()
         issue = match.group(2).strip()
         time = int(match.group(3).strip())
+
         losses.append({
             "Line": line_type,
             "WK": wk,
@@ -53,7 +63,7 @@ def extract_losses(text, line_type):
         })
     return losses
 
-# --- Split multiple CB/CH reports ---
+# --- Split multiple reports ---
 def split_reports(full_text):
     pattern = r'((?:CB LINE PRODUCTION REPORT|BLOCK LINE|HEAD LINE|CH LINE).*?)(?=CB LINE PRODUCTION REPORT|BLOCK LINE|HEAD LINE|CH LINE|$)'
     blocks = re.findall(pattern, full_text, re.DOTALL | re.IGNORECASE)
@@ -65,12 +75,13 @@ def split_reports(full_text):
             results.append(("CH", block.strip()))
     return results
 
-# --- Streamlit UI ---
-user_input = st.text_area("📥 Paste multiple CB/CH reports here", height=400)
+# --- UI Input ---
+user_input = st.text_area("📥 Paste multiple CB + CH reports below:", height=400)
 
+# --- Button Action ---
 if st.button("🔍 Extract Major Losses"):
     if not user_input.strip():
-        st.warning("Please paste report text.")
+        st.warning("Please paste some report text.")
     else:
         all_data = []
         reports = split_reports(user_input)
@@ -81,10 +92,14 @@ if st.button("🔍 Extract Major Losses"):
 
         if all_data:
             df = pd.DataFrame(all_data)
-            st.success(f"✅ Extracted {len(df)} total losses from {len(reports)} reports.")
+
+            # ✅ Format date as DD/MM/YYYY
+            df["Date"] = pd.to_datetime(df["Date"], errors='coerce').dt.strftime("%d/%m/%Y")
+
+            st.success(f"✅ Extracted {len(df)} losses from {len(reports)} reports.")
             st.dataframe(df, use_container_width=True)
 
-            # Excel download
+            # --- Download Excel ---
             buffer = BytesIO()
             df.to_excel(buffer, index=False, engine='openpyxl')
             buffer.seek(0)
