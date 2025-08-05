@@ -6,68 +6,79 @@ from datetime import datetime
 
 st.title("CB/CH Loss Data Extractor")
 
-# Input field
-raw_text = st.text_area("Paste your full WhatsApp-style raw data here (CB/CH multiple dates allowed):", height=300)
+raw_text = st.text_area("Paste raw WhatsApp-style production reports here (CB + CH, multiple dates allowed):", height=300)
 
-def extract_data(text):
-    pattern = re.compile(
-        r"(CB|CH)[\s\S]*?(?=CB|CH|$)", re.IGNORECASE)
-    entries = []
+def parse_date(text_block):
+    date_match = re.search(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})\b", text_block)
+    if date_match:
+        day, month, year = date_match.groups()
+        if len(year) == 2:
+            year = '20' + year  # Convert 25 to 2025
+        try:
+            return datetime.strptime(f"{day}/{month}/{year}", "%d/%m/%Y").strftime("%d/%m/%Y")
+        except:
+            return ""
+    return ""
 
-    for block in pattern.findall(text + "\nCB"):
-        line_match = re.search(r"\b(CB|BLOCK|CH|HEAD)\b", block, re.IGNORECASE)
-        date_match = re.search(r"(\d{1,2})[/-](\d{1,2})[/-](\d{4})", block)
+def extract_losses(text):
+    blocks = re.split(r"\n(?=.*?(CB LINE|BLOCK|CH|HEAD))", text, flags=re.IGNORECASE)
+    combined_blocks = ["".join(pair) for pair in zip(blocks[1::2], blocks[2::2])]
+    
+    results = []
+
+    for block in combined_blocks:
+        line = "CB" if re.search(r"\b(CB LINE|BLOCK)\b", block, re.IGNORECASE) else "CH"
+        date = parse_date(block)
         shift_match = re.search(r"\(([A-Ca-c])\)", block)
-        loss_lines = re.findall(
-            r"(OP\d{2,3}(?:-\d)?(?:\(#?\d+[-&]?\d*\))?)\s*[-:]?\s*(.*?)(\d{1,3})\s*min", block, re.IGNORECASE)
+        shift = shift_match.group(1).upper() if shift_match else ""
 
-        if line_match and date_match and shift_match:
-            line = line_match.group(1).upper()
-            raw_date = f"{date_match.group(1)}/{date_match.group(2)}/{date_match.group(3)}"
-            try:
-                date = datetime.strptime(raw_date, "%d/%m/%Y").strftime("%d/%m/%Y")
-            except:
-                date = None
-            shift = shift_match.group(1).upper()
+        # Match stations like OP70, OP150-2, OP120(#241), etc.
+        loss_entries = re.findall(
+            r"(OP\d{2,3}(?:-\d)?(?:\(#?\d+(?:-\d+)?\))?)\s*[-:]?\s*(.*?)(\d{1,3})\s*min",
+            block, re.IGNORECASE
+        )
 
-            for match in loss_lines:
-                station = match[0].strip().upper()
-                issue = match[1].strip()
-                downtime = int(match[2])
-                entries.append({
-                    "Line": line,
-                    "Date": date,
-                    "Shift": shift,
-                    "Station": station,
-                    "E/M": "",  # Can be filled manually later
-                    "Issue/Observation": issue,
-                    "Down time": downtime,
-                    "Impacted loss": "",  # To be filled later
-                    "OLE Impacted Loss": "",  # Optional
-                    "Activity Performed": "",
-                    "Attend by": "",
-                    "EWO Status": "",
-                    "Countermeasure": "",
-                    "Responsibility": "",
-                    "Target date": "",
-                    "Status": "",
-                    "Spare Required": "",
-                    "Stratification": "",
-                    "Remark": ""
-                })
-    return pd.DataFrame(entries)
+        for station, issue, mins in loss_entries:
+            results.append({
+                "Line": line,
+                "Date": date,
+                "Shift": shift,
+                "Station": station.strip().upper(),
+                "E/M": "",
+                "Issue/Observation": issue.strip(),
+                "Down time": int(mins),
+                "Impacted loss": "",
+                "OLE Impacted Loss": "",
+                "Activity Performed": "",
+                "Attend by": "",
+                "EWO Status": "",
+                "Countermeasure": "",
+                "Responsibility": "",
+                "Target date": "",
+                "Status": "",
+                "Spare Required": "",
+                "Stratification": "",
+                "Remark": ""
+            })
+
+    return pd.DataFrame(results)
 
 if st.button("Extract Data"):
-    if raw_text:
-        df = extract_data(raw_text)
+    if raw_text.strip():
+        df = extract_losses(raw_text)
         if not df.empty:
-            st.success("Extraction completed!")
+            st.success("✅ Data extracted successfully!")
             st.dataframe(df)
 
-            buffer = BytesIO()
-            df.to_excel(buffer, index=False, engine='openpyxl')
-            st.download_button("Download Excel", buffer.getvalue(), "loss_data.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            output = BytesIO()
+            df.to_excel(output, index=False, engine='openpyxl')
+            st.download_button(
+                "📥 Download as Excel",
+                output.getvalue(),
+                file_name="cb_ch_loss_data.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
         else:
-            st.error("No valid data found.")
+            st.error("⚠️ No valid loss data found.")
     else:
-        st.warning("Please paste some data.")
+        st.warning("⚠️ Please paste some raw report data first.")
