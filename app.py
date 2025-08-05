@@ -41,7 +41,7 @@ def extract_losses(text, line_type):
         wk = ''
     
     losses = []
-    pattern = re.compile(r'(OP\d+(?:\([^)]+\))?)\s*[-:]?\s*(.*?)(?:\(\d{1,2}:\d{2}(?:-\d{1,2}:\d{2})?\))?[-:]?\s*(\d+)\s*min', flags=re.IGNORECASE)
+    pattern = re.compile(r'(OP\d+(?:-\d+)?(?:\([^)]+\))?)\s*[-:]?\s*(.*?)(?:\(\d{1,2}:\d{2}(?:-\d{1,2}:\d{2})?\))?[-:]?\s*(\d+)\s*min', flags=re.IGNORECASE)
     for match in pattern.finditer(text):
         station = match.group(1).strip()
         issue = match.group(2).strip()
