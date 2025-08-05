@@ -12,12 +12,19 @@ st.title("📋 CB & CH Major Losses Extractor (Multiple Reports)")
 def parse_shift_and_date(text):
     # CB style: DATE-15/07/2025 (B)
     date_match = re.search(r'DATE[-:\s]*([0-9]{2}/[0-9]{2}/[0-9]{4})', text, re.IGNORECASE)
+    
     # CH style: 15/07/2025\nHEAD LINE (B-SHIFT)
     if not date_match:
-        date_match = re.search(r'(^[0-9]{2}/[0-9]{2}/[0-9]{4})', text)
-    date = date_match.group(1).strip() if date_match else ''
+        date_match = re.search(r'(^|\n)([0-9]{2}/[0-9]{2}/[0-9]{4})(?=\n)', text)
+    
+    date = date_match.group(1).strip() if date_match and date_match.group(1).strip().count('/') == 2 else ''
+    if not date:
+        try:
+            date = date_match.group(2).strip()
+        except:
+            date = ''
 
-    # Shift in (B-SHIFT) or (C)
+    # Shift match: (B) or (B-SHIFT)
     shift_match = re.search(r'\(([ABCabc])(?:-?SHIFT)?\)', text)
     shift = shift_match.group(1).upper() if shift_match else ''
     
